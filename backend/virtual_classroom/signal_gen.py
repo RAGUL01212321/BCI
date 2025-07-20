@@ -4,97 +4,129 @@ import random
 import numpy as np
 import matplotlib.pyplot as plt
 import shutil
+from scipy.signal import butter, filtfilt
 
 EEG_CSV_FILE = Path("virtual_classroom_eeg.csv")
 PLOTS_DIR = Path("virtual_classroom_eeg_plots")
 
-# --- Function to generate synthetic EEG signal based on class parameters ---
-def generate_synthetic_eeg_signals(params, length=32):
-    def normalize(val, max_val=10):
-        return min(max(val / max_val, 0.0), 1.0)  # Clamp between 0 and 1
+# --- Helper: Bandpass filter ---
+def bandpass_filter(data, lowcut, highcut, fs, order=4):
+    nyq = 0.5 * fs
+    low = lowcut / nyq
+    high = highcut / nyq
+    b, a = butter(order, [low, high], btype='band')
+    return filtfilt(b, a, data)
 
-    # Normalize inputs
-    noise = normalize(params["noise_level"])
-    lighting = normalize(params["lighting"])
-    temp = normalize(params["temperature"])
-    seat = normalize(params["seating_comfort"])
-    session = normalize(params["session_duration"])
-    difficulty = normalize(params["task_difficulty"])
-    strength = normalize(params["class_strength"])
+# --- Generate realistic EEG signal ---
+def generate_realistic_eeg(params, length=1024, fs=128):
+    t = np.arange(length) / fs
+    noise_level = params["noise_level"]
+    lighting = params["lighting"]
+    temp = params["temperature"]
+    seat = params["seating_comfort"]
+    session = params["session_duration"]
+    difficulty = params["task_difficulty"]
 
-    # Base signal values influenced by class environment
-    base_beta = 60 + 10 * (difficulty + seat - noise)
-    base_alpha = 40 + 10 * (lighting + noise - difficulty)
-    base_theta = 30 + 10 * (session + temp - seat)
+    eeg = np.zeros_like(t)
 
-    # Time axis
-    x = np.linspace(0, 2 * np.pi, length)
+    def band_noise(low, high, amplitude):
+        noise = np.random.normal(0, 1, len(t))
+        band = bandpass_filter(noise, low, high, fs)
+        return band * amplitude
 
-    # Generate signals with sinusoidal trends and Gaussian noise
-    noise_std = max(noise * 10, 0)  # Prevent negative std deviation
-    beta = base_beta + 5 * np.sin(x) + np.random.normal(0, noise_std, length)
-    alpha = base_alpha + 4 * np.sin(x + 1) + np.random.normal(0, noise_std, length)
-    theta = base_theta + 3 * np.sin(x + 2) + np.random.normal(0, noise_std, length)
+    eeg += band_noise(0.5, 4, 5 + 0.5 * temp)                  # Delta
+    eeg += band_noise(4, 8, 7 + 0.4 * session)                 # Theta
+    eeg += band_noise(8, 14, 10 + 0.5 * (10 - difficulty))     # Alpha
+    eeg += band_noise(14, 30, 6 + 0.6 * difficulty)            # Beta
+    eeg += band_noise(30, 63, 4 + 0.3 * lighting)              # Gamma
 
-    # Clip to realistic EEG range
-    beta = np.clip(beta, 0, 100)
-    alpha = np.clip(alpha, 0, 100)
-    theta = np.clip(theta, 0, 100)
+    # Add artifacts (random bursts)
+    for _ in range(random.randint(1, 3)):
+        idx = random.randint(0, len(t)-20)
+        eeg[idx:idx+20] += np.random.normal(30, 5, 20)
 
-    # Calculate attention index
-    attention_index = np.clip(100 * beta / (alpha + theta + 1e-6), 0, 100)
+    # Add baseline drift and white noise
+    drift = np.cumsum(np.random.normal(0, 0.05, len(t)))
+    white = np.random.normal(0, 1 + 0.2 * noise_level, len(t))
+    eeg += drift + white
 
+    return eeg
+
+# --- Decompose EEG into bands ---
+def decompose_eeg_bands(eeg, fs=128):
     return {
-        "beta": beta.round(2).tolist(),
-        "alpha": alpha.round(2).tolist(),
-        "theta": theta.round(2).tolist(),
-        "attention_index": attention_index.round(2).tolist()
+        "Delta": bandpass_filter(eeg, 0.5, 4, fs),
+        "Theta": bandpass_filter(eeg, 4, 8, fs),
+        "Alpha": bandpass_filter(eeg, 8, 14, fs),
+        "Beta": bandpass_filter(eeg, 14, 30, fs),
+        "Gamma": bandpass_filter(eeg, 30, 63, fs),
     }
 
 # --- Per-student jittering for realism ---
-def generate_student_signal(params, noise_scale=1.0):
+def generate_student_signal(params, length=1024, fs=128):
     jittered = params.copy()
-    # Clamp noise_level ≥ 0 after jitter
-    jittered["noise_level"] = max(jittered["noise_level"] + random.uniform(-0.5, 0.5) * noise_scale, 0)
-    jittered["lighting"] += random.uniform(-0.5, 0.5)
-    jittered["temperature"] += random.uniform(-0.5, 0.5)
-    jittered["seating_comfort"] += random.uniform(-0.5, 0.5)
-    jittered["session_duration"] += random.uniform(-0.5, 0.5)
-    jittered["task_difficulty"] += random.uniform(-0.5, 0.5)
-    return generate_synthetic_eeg_signals(jittered)
+    for key in ["noise_level", "lighting", "temperature", "seating_comfort", "session_duration", "task_difficulty"]:
+        jittered[key] += random.uniform(-0.5, 0.5)
 
-def plot_and_save_signals(signals, student_id, output_dir):
-    x = np.arange(len(signals["beta"]))
-    plt.figure(figsize=(8, 5))
-    plt.plot(x, signals["beta"], label="Beta")
-    plt.plot(x, signals["alpha"], label="Alpha")
-    plt.plot(x, signals["theta"], label="Theta")
-    plt.plot(x, signals["attention_index"], label="Attention Index", linestyle="--")
-    plt.xlabel("Time")
-    plt.ylabel("Value")
-    plt.title(f"Student {student_id} EEG Signals")
-    plt.legend()
+    eeg = generate_realistic_eeg(jittered, length=length, fs=fs)
+    bands = decompose_eeg_bands(eeg, fs=fs)
+
+    # Attention index: beta / (alpha + theta)
+    ai = 100 * np.mean(np.abs(bands["Beta"])) / (
+        np.mean(np.abs(bands["Alpha"])) + np.mean(np.abs(bands["Theta"])) + 1e-6
+    )
+    ai = np.clip(ai, 0, 100)
+
+    return {
+        "raw_eeg": eeg.round(2).tolist(),
+        **{band: data.round(2).tolist() for band, data in bands.items()},
+        "attention_index": round(ai, 2)
+    }
+
+# --- Plot and save ---
+def plot_and_save_signals(signals, student_id, base_dir):
+    student_dir = base_dir / f"student_{student_id}"
+    student_dir.mkdir(parents=True, exist_ok=True)
+    x = np.arange(len(signals["raw_eeg"])) / 128  # time axis in seconds
+
+    # Raw EEG plot
+    plt.figure(figsize=(10, 3))
+    plt.plot(x, signals["raw_eeg"], color="black")
+    plt.title("Raw EEG")
+    plt.xlabel("Time (sec)")
     plt.tight_layout()
-    img_path = output_dir / f"student_{student_id}.png"
-    plt.savefig(img_path)
+    plt.savefig(student_dir / "raw_eeg.png")
     plt.close()
 
+    # Combined subplot of all bands
+    fig, axes = plt.subplots(6, 1, figsize=(12, 10), sharex=True)
+    axes[0].plot(x, signals["raw_eeg"])
+    axes[0].set_ylabel("rawEEG")
+    band_names = ["Delta", "Theta", "Alpha", "Beta", "Gamma"]
+    for i, band in enumerate(band_names):
+        axes[i+1].plot(x, signals[band])
+        axes[i+1].set_ylabel(band)
+    axes[-1].set_xlabel("time (sec)")
+    plt.tight_layout()
+    plt.savefig(student_dir / "eeg_decomposition.png")
+    plt.close()
+
+# --- Prepare plots directory ---
 def wipe_and_prepare_plots_dir(plots_dir):
     if plots_dir.exists():
         shutil.rmtree(plots_dir)
     plots_dir.mkdir(exist_ok=True)
 
+# --- Main generator ---
 def process_parameters_and_generate_eeg(params):
-    # Wipe plots directory
     wipe_and_prepare_plots_dir(PLOTS_DIR)
-    # Overwrite CSV file
     with open(EEG_CSV_FILE, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow([
             "timestamp", "student_id",
             "noise_level", "lighting", "temperature", "seating_comfort",
             "teaching_method", "time_of_day", "session_duration", "task_difficulty", "class_strength",
-            "beta", "alpha", "theta", "attention_index"
+            "raw_eeg", "delta", "theta", "alpha", "beta", "gamma", "attention_index"
         ])
         num_students = int(params.get("class_strength", 50))
         for student_id in range(1, num_students + 1):
@@ -111,9 +143,12 @@ def process_parameters_and_generate_eeg(params):
                 params.get("session_duration"),
                 params.get("task_difficulty"),
                 params.get("class_strength"),
-                signals["beta"],
-                signals["alpha"],
-                signals["theta"],
+                signals["raw_eeg"],
+                signals["Delta"],
+                signals["Theta"],
+                signals["Alpha"],
+                signals["Beta"],
+                signals["Gamma"],
                 signals["attention_index"]
             ])
             plot_and_save_signals(signals, student_id, PLOTS_DIR)
