@@ -207,3 +207,6 @@ marimo/_lsp/
 __marimo__/
 
 /data
+
+virtual_classroom_eeg_plots/
+virtual_classroom_eeg.csv

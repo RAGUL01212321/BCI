@@ -1,12 +1,12 @@
-import json
 import csv
 from pathlib import Path
 import random
 import numpy as np
+import matplotlib.pyplot as plt
+import shutil
 
-# File paths
-DATA_FILE = Path(r"BCI\backend\virtual_classroom_data.json")  # Input JSON
-EEG_CSV_FILE = Path("virtual_classroom_eeg.csv")              # Output CSV
+EEG_CSV_FILE = Path("virtual_classroom_eeg.csv")
+PLOTS_DIR = Path("virtual_classroom_eeg_plots")
 
 # --- Function to generate synthetic EEG signal based on class parameters ---
 def generate_synthetic_eeg_signals(params, length=32):
@@ -63,53 +63,59 @@ def generate_student_signal(params, noise_scale=1.0):
     jittered["task_difficulty"] += random.uniform(-0.5, 0.5)
     return generate_synthetic_eeg_signals(jittered)
 
-# --- Main processing ---
-def process_json_and_generate_eeg():
-    if not DATA_FILE.exists():
-        print("No data file found.")
-        return
+def plot_and_save_signals(signals, student_id, output_dir):
+    x = np.arange(len(signals["beta"]))
+    plt.figure(figsize=(8, 5))
+    plt.plot(x, signals["beta"], label="Beta")
+    plt.plot(x, signals["alpha"], label="Alpha")
+    plt.plot(x, signals["theta"], label="Theta")
+    plt.plot(x, signals["attention_index"], label="Attention Index", linestyle="--")
+    plt.xlabel("Time")
+    plt.ylabel("Value")
+    plt.title(f"Student {student_id} EEG Signals")
+    plt.legend()
+    plt.tight_layout()
+    img_path = output_dir / f"student_{student_id}.png"
+    plt.savefig(img_path)
+    plt.close()
 
-    with open(DATA_FILE, "r") as f:
-        try:
-            data = json.load(f)
-        except Exception:
-            print("Invalid JSON file.")
-            return
+def wipe_and_prepare_plots_dir(plots_dir):
+    if plots_dir.exists():
+        shutil.rmtree(plots_dir)
+    plots_dir.mkdir(exist_ok=True)
 
+def process_parameters_and_generate_eeg(params):
+    # Wipe plots directory
+    wipe_and_prepare_plots_dir(PLOTS_DIR)
+    # Overwrite CSV file
     with open(EEG_CSV_FILE, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
-        # Write header
         writer.writerow([
             "timestamp", "student_id",
             "noise_level", "lighting", "temperature", "seating_comfort",
             "teaching_method", "time_of_day", "session_duration", "task_difficulty", "class_strength",
             "beta", "alpha", "theta", "attention_index"
         ])
-
-        for entry in data:
-            num_students = int(entry.get("class_strength", 50))  # Default to 50 if missing
-            for student_id in range(1, num_students + 1):
-                signals = generate_student_signal(entry)
-                writer.writerow([
-                    entry.get("timestamp"),
-                    student_id,
-                    entry.get("noise_level"),
-                    entry.get("lighting"),
-                    entry.get("temperature"),
-                    entry.get("seating_comfort"),
-                    entry.get("teaching_method"),
-                    entry.get("time_of_day"),
-                    entry.get("session_duration"),
-                    entry.get("task_difficulty"),
-                    entry.get("class_strength"),
-                    signals["beta"],
-                    signals["alpha"],
-                    signals["theta"],
-                    signals["attention_index"]
-                ])
-
+        num_students = int(params.get("class_strength", 50))
+        for student_id in range(1, num_students + 1):
+            signals = generate_student_signal(params)
+            writer.writerow([
+                params.get("timestamp"),
+                student_id,
+                params.get("noise_level"),
+                params.get("lighting"),
+                params.get("temperature"),
+                params.get("seating_comfort"),
+                params.get("teaching_method"),
+                params.get("time_of_day"),
+                params.get("session_duration"),
+                params.get("task_difficulty"),
+                params.get("class_strength"),
+                signals["beta"],
+                signals["alpha"],
+                signals["theta"],
+                signals["attention_index"]
+            ])
+            plot_and_save_signals(signals, student_id, PLOTS_DIR)
     print(f"✅ EEG data written to {EEG_CSV_FILE}")
-
-# --- Run the script ---
-if __name__ == "__main__":
-    process_json_and_generate_eeg()
+    print(f"✅ Plots saved in {PLOTS_DIR}")
