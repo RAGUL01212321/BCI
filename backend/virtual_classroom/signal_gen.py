@@ -111,6 +111,33 @@ def plot_and_save_signals(signals, student_id, base_dir):
     plt.savefig(student_dir / "eeg_decomposition.png")
     plt.close()
 
+def plot_and_save_mean_signals(mean_signals, base_dir):
+    mean_dir = base_dir / "MEAN"
+    mean_dir.mkdir(parents=True, exist_ok=True)
+    x = np.arange(len(mean_signals["raw_eeg"])) / 128  # time axis in seconds
+
+    # Raw EEG mean plot
+    plt.figure(figsize=(10, 3))
+    plt.plot(x, mean_signals["raw_eeg"], color="black")
+    plt.title("Mean Raw EEG (All Students)")
+    plt.xlabel("Time (sec)")
+    plt.tight_layout()
+    plt.savefig(mean_dir / "raw_eeg.png")
+    plt.close()
+
+    # Combined subplot of all mean bands
+    fig, axes = plt.subplots(6, 1, figsize=(12, 10), sharex=True)
+    axes[0].plot(x, mean_signals["raw_eeg"])
+    axes[0].set_ylabel("rawEEG")
+    band_names = ["Delta", "Theta", "Alpha", "Beta", "Gamma"]
+    for i, band in enumerate(band_names):
+        axes[i+1].plot(x, mean_signals[band])
+        axes[i+1].set_ylabel(band)
+    axes[-1].set_xlabel("time (sec)")
+    plt.tight_layout()
+    plt.savefig(mean_dir / "eeg_decomposition.png")
+    plt.close()
+
 # --- Prepare plots directory ---
 def wipe_and_prepare_plots_dir(plots_dir):
     if plots_dir.exists():
@@ -120,6 +147,7 @@ def wipe_and_prepare_plots_dir(plots_dir):
 # --- Main generator ---
 def process_parameters_and_generate_eeg(params):
     wipe_and_prepare_plots_dir(PLOTS_DIR)
+    all_signals = {"raw_eeg": [], "Delta": [], "Theta": [], "Alpha": [], "Beta": [], "Gamma": []}
     with open(EEG_CSV_FILE, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow([
@@ -152,5 +180,14 @@ def process_parameters_and_generate_eeg(params):
                 signals["attention_index"]
             ])
             plot_and_save_signals(signals, student_id, PLOTS_DIR)
+            # Collect for mean
+            for key in all_signals.keys():
+                all_signals[key].append(np.array(signals[key], dtype=float))
+    # Compute and plot mean signals
+    mean_signals = {}
+    for key, arrs in all_signals.items():
+        stacked = np.stack(arrs)
+        mean_signals[key] = np.mean(stacked, axis=0).round(2).tolist()
+    plot_and_save_mean_signals(mean_signals, PLOTS_DIR)
     print(f"✅ EEG data written to {EEG_CSV_FILE}")
     print(f"✅ Plots saved in {PLOTS_DIR}")
