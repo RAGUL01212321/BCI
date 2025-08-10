@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from datetime import datetime
 from typing import Any
 from .signal_gen import process_parameters_and_generate_eeg
+from .csv_upload import process_uploaded_csv
 
 import csv
 from pathlib import Path
@@ -110,3 +111,29 @@ def get_student_signals(student_id: int):
                     "signals": signals
                 }
     raise HTTPException(status_code=404, detail=f"Student ID {student_id} not found.")
+
+@router.post("/virtual-classroom/upload-csv")
+async def upload_csv_file(file: UploadFile = File(...)):
+    """
+    Upload a CSV file to replace the current EEG dataset.
+    The uploaded file must match the exact format of the generated virtual classroom dataset.
+    
+    Returns:
+    - success: Whether the upload was successful
+    - validation_results: Details about the validation process
+    - file_info: Information about the uploaded file
+    """
+    # Validate file type
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Only CSV files are allowed")
+    
+    # Process the uploaded file
+    result = process_uploaded_csv(file)
+    
+    if not result['success']:
+        raise HTTPException(status_code=400, detail=result['error'])
+    
+    return {
+        "message": "CSV file uploaded and replaced successfully",
+        "data": result
+    }
